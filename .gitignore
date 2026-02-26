@@ -1,0 +1,5 @@
+node_modules/
+auth/
+.env
+service-account.json
+gen-lang-client-*.json
