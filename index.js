@@ -33,6 +33,8 @@ const FOLLOWUP_HOURS_2 = Number(process.env.FOLLOWUP_HOURS_2 || '48');
 const FOLLOWUP_HOURS_3 = Number(process.env.FOLLOWUP_HOURS_3 || '72');
 const MISTRAL_API_KEY = process.env.MISTRAL_API_KEY || '';
 const MISTRAL_MODEL = process.env.MISTRAL_MODEL || 'mistral-small-latest';
+const USE_PAIRING_CODE = String(process.env.USE_PAIRING_CODE || 'false').toLowerCase() === 'true';
+const PAIRING_PHONE_NUMBER = (process.env.PAIRING_PHONE_NUMBER || '').replace(/\D/g, '');
 
 const logger = P({ level: process.env.LOG_LEVEL || 'info' });
 
@@ -848,10 +850,31 @@ async function start() {
 
   sock.ev.on('creds.update', saveCreds);
 
+  // Headless logs often render QR poorly; pairing code is more reliable on Railway.
+  if (USE_PAIRING_CODE && !state.creds.registered && PAIRING_PHONE_NUMBER) {
+    setTimeout(async () => {
+      try {
+        const pairingCode = await sock.requestPairingCode(PAIRING_PHONE_NUMBER);
+        logger.info(
+          { pairingCode },
+          'pairing code generated (WhatsApp > Linked devices > Link with phone number)'
+        );
+      } catch (err) {
+        logger.error({ err }, 'failed to generate pairing code');
+      }
+    }, 3000);
+  }
+
   sock.ev.on('connection.update', (update) => {
     const { connection, lastDisconnect, qr } = update;
 
-    if (qr) qrcode.generate(qr, { small: true });
+    if (qr && !USE_PAIRING_CODE) {
+      qrcode.generate(qr, { small: false });
+      const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=360x360&data=${encodeURIComponent(
+        qr
+      )}`;
+      logger.info({ qrUrl }, 'open this URL to scan QR if terminal QR looks broken');
+    }
 
     if (connection === 'close') {
       const statusCode = lastDisconnect?.error?.output?.statusCode;
