@@ -665,10 +665,7 @@ async function handlePatientFlow(sock, sheets, s, text) {
     await sock.sendMessage(s.jid, {
       text:
         'Based on your details, I’ll personally review your case and suggest the best plan 👩‍⚕️\n\n' +
-        'Choose an option below 👇\n\n' +
-        `🔹 Book 1:1 Call with Dr. Ruchita Mehta\n${PATIENT_LINK}\n\n` +
-        'OR\n\n' +
-        `🔹 Join FREE Diabetes Management Webinar\n${DIABETES_WEBINAR_LINK}`
+        `🔹 Book 1:1 Call with Dr. Ruchita Mehta\n${PATIENT_LINK}`
     });
     await finishFlow(sock, sheets, s);
     return;
