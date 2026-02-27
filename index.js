@@ -31,6 +31,8 @@ const OTHER_LINK = process.env.OTHER_LINK || TYPE1_LINK;
 const FOLLOWUP_HOURS_1 = Number(process.env.FOLLOWUP_HOURS_1 || '24');
 const FOLLOWUP_HOURS_2 = Number(process.env.FOLLOWUP_HOURS_2 || '48');
 const FOLLOWUP_HOURS_3 = Number(process.env.FOLLOWUP_HOURS_3 || '72');
+const REPLY_DELAY_MIN_SECONDS = Number(process.env.REPLY_DELAY_MIN_SECONDS || '0');
+const REPLY_DELAY_MAX_SECONDS = Number(process.env.REPLY_DELAY_MAX_SECONDS || '60');
 const MISTRAL_API_KEY = process.env.MISTRAL_API_KEY || '';
 const MISTRAL_MODEL = process.env.MISTRAL_MODEL || 'mistral-small-latest';
 const USE_PAIRING_CODE = String(process.env.USE_PAIRING_CODE || 'false').toLowerCase() === 'true';
@@ -63,6 +65,19 @@ function canonicalPhone(v) {
   const digits = String(v || '').replace(/\D/g, '');
   if (!digits) return '';
   return digits.length > 10 ? digits.slice(-10) : digits;
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function randomDelayMs() {
+  const min = Number.isFinite(REPLY_DELAY_MIN_SECONDS) ? REPLY_DELAY_MIN_SECONDS : 0;
+  const max = Number.isFinite(REPLY_DELAY_MAX_SECONDS) ? REPLY_DELAY_MAX_SECONDS : 60;
+  const lo = Math.max(0, Math.min(min, max));
+  const hi = Math.max(0, Math.max(min, max));
+  const seconds = lo + Math.random() * (hi - lo);
+  return Math.round(seconds * 1000);
 }
 
 function readJsonFileMaybe(filePath) {
@@ -879,6 +894,17 @@ async function start() {
       return jid === 'status@broadcast' || jid.endsWith('@g.us') || jid.endsWith('@newsletter');
     }
   });
+
+  // Add randomized anti-spam delay to all outgoing replies.
+  const rawSendMessage = sock.sendMessage.bind(sock);
+  sock.sendMessage = async (jid, content, options) => {
+    const delayMs = randomDelayMs();
+    if (delayMs > 0) {
+      logger.info({ jid, delayMs }, 'delaying outgoing message');
+      await sleep(delayMs);
+    }
+    return rawSendMessage(jid, content, options);
+  };
 
   sock.ev.on('creds.update', saveCreds);
 
