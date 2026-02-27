@@ -686,7 +686,7 @@ async function handlePatientFlow(sock, sheets, s, text) {
       text:
         'Based on your goal, I recommend a personalized consultation where we deeply analyse your case and create a structured plan.\n\n' +
         'You can book your appointment here 👇\n\n' +
-        `🔗${TYPE1_LINK}\n\n` +
+        '🔗https://drruchitamehta.exlyapp.com/checkout/d3b56137-7abc-4ecf-b8b6-5af21a31f3b7\n\n' +
         'Let us know once booked, we’ll guide you with the next steps 💙'
     });
     await finishFlow(sock, sheets, s);
