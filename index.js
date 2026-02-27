@@ -124,14 +124,42 @@ function buildSheetsClient() {
   return google.sheets({ version: 'v4', auth });
 }
 
+function unwrapMessageContent(message) {
+  if (!message) return null;
+  let m = message;
+  for (let i = 0; i < 5; i += 1) {
+    if (m.ephemeralMessage?.message) {
+      m = m.ephemeralMessage.message;
+      continue;
+    }
+    if (m.viewOnceMessage?.message) {
+      m = m.viewOnceMessage.message;
+      continue;
+    }
+    if (m.viewOnceMessageV2?.message) {
+      m = m.viewOnceMessageV2.message;
+      continue;
+    }
+    if (m.viewOnceMessageV2Extension?.message) {
+      m = m.viewOnceMessageV2Extension.message;
+      continue;
+    }
+    break;
+  }
+  return m;
+}
+
 function getIncomingText(msg) {
+  const message = unwrapMessageContent(msg.message);
   return (
-    msg.message?.conversation ||
-    msg.message?.extendedTextMessage?.text ||
-    msg.message?.buttonsResponseMessage?.selectedDisplayText ||
-    msg.message?.buttonsResponseMessage?.selectedButtonId ||
-    msg.message?.listResponseMessage?.title ||
-    msg.message?.listResponseMessage?.singleSelectReply?.selectedRowId ||
+    message?.conversation ||
+    message?.extendedTextMessage?.text ||
+    message?.imageMessage?.caption ||
+    message?.videoMessage?.caption ||
+    message?.buttonsResponseMessage?.selectedDisplayText ||
+    message?.buttonsResponseMessage?.selectedButtonId ||
+    message?.listResponseMessage?.title ||
+    message?.listResponseMessage?.singleSelectReply?.selectedRowId ||
     ''
   ).trim();
 }
@@ -887,7 +915,7 @@ async function start() {
   });
 
   sock.ev.on('messages.upsert', async (event) => {
-    if (event.type !== 'notify') return;
+    if (event.type !== 'notify' && event.type !== 'append') return;
     for (const msg of event.messages) {
       try {
         await processIncoming(sock, sheets, msg);
