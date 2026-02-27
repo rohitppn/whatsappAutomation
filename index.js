@@ -821,9 +821,7 @@ async function processIncoming(sock, sheets, msg) {
   if (!s) {
     const existing = await isExistingUser(sheets, canonicalPhone(getPhoneFromJid(jid)));
     if (existing) {
-      const textForAi = getIncomingText(msg) || 'Hi';
-      const reply = await generateAiReply(textForAi);
-      await sock.sendMessage(jid, { text: reply });
+      logger.info({ jid }, 'existing user detected; no reply sent');
       return;
     }
     s = newSession(jid);
