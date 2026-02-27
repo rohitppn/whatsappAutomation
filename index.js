@@ -239,6 +239,61 @@ function parseBulk(text, expected) {
   return data;
 }
 
+function parseMetaPrefill(text) {
+  const lines = String(text || '')
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean);
+  if (!lines.length) return null;
+
+  const out = {};
+  for (const line of lines) {
+    const idx = line.indexOf(':');
+    if (idx <= 0) continue;
+    const rawKey = line.slice(0, idx).trim();
+    const value = line.slice(idx + 1).trim();
+    if (!value) continue;
+
+    const key = norm(rawKey);
+    if (key.includes('firstname') || key === 'name') {
+      out.name = value;
+      continue;
+    }
+    if (key === 'age') {
+      out.age = value;
+      continue;
+    }
+    if (key.includes('phonenumber') || key.includes('whatsappnumber') || key.includes('contactnumber')) {
+      out.contact_number = value;
+      continue;
+    }
+    if (key.includes('email')) {
+      out.email = value;
+      continue;
+    }
+    if (key.includes('whatbestdescribesyou')) {
+      out.profession = value;
+      continue;
+    }
+    if (key.includes('areyoucurrentlyworkingwithdiabeticclientspatients')) {
+      out.best_describes = value;
+      continue;
+    }
+    if (key.includes('whatisyourbiggestchallengewithdiabetesclientsrightnow')) {
+      out.biggest_challenge = value;
+    }
+  }
+
+  // Treat as Meta prefill only if we got enough structured fields.
+  const score =
+    Number(Boolean(out.name)) +
+    Number(Boolean(out.email)) +
+    Number(Boolean(out.contact_number)) +
+    Number(Boolean(out.profession || out.best_describes || out.biggest_challenge));
+  if (score < 3) return null;
+  return out;
+}
+
 function confirmPatient(d) {
   return (
     `Name: ${d.name || ''}\n` +
@@ -432,9 +487,9 @@ async function saveStudent(sheets, s) {
     d.age || '',
     d.contact_number || '',
     d.email || '',
+    d.profession || '',
     d.best_describes || '',
-    d.best_describes || '',
-    d.training_goal || '',
+    d.training_goal || d.biggest_challenge || '',
     d.webinar_interest || 'Yes',
     WEBINAR_LINK,
     new Date().toISOString(),
@@ -729,6 +784,34 @@ async function handleOtherFlow(sock, sheets, s, text) {
 }
 
 async function handleStudentFlow(sock, sheets, s, text) {
+  if (s.step === 's_prefill_age') {
+    s.data.age = text;
+    if (s.data.best_describes) {
+      s.step = 's_goal';
+      await sock.sendMessage(s.jid, {
+        text:
+          'What is your main goal from this training?\n\n' +
+          'A) Become Diabetes Educator\n' +
+          'B) Start own practice\n' +
+          'C) Increase income\n' +
+          'D) Help more patients\n' +
+          'E) All of the above'
+      });
+      return;
+    }
+
+    s.step = 's_best';
+    await sock.sendMessage(s.jid, {
+      text:
+        'Great  Which best describes you?\n\n' +
+        'A) Beginner – No diabetes coaching experience\n' +
+        'B) Some experience but not confident\n' +
+        'C) Already seeing diabetes clients\n' +
+        'D) Just exploring'
+    });
+    return;
+  }
+
   if (s.step === 's_collect') {
     const bulk = parseBulk(text, ['name', 'age', 'email', 'contact_number']);
     if (!bulk) {
@@ -818,18 +901,73 @@ async function processIncoming(sock, sheets, msg) {
   }
 
   let s = sessions.get(jid);
+  const text = getIncomingText(msg);
+
   if (!s) {
     const existing = await isExistingUser(sheets, canonicalPhone(getPhoneFromJid(jid)));
     if (existing) {
       logger.info({ jid }, 'existing user detected; no reply sent');
       return;
     }
+
+    // Meta prefill format: auto-capture and continue from remaining questions.
+    const prefill = parseMetaPrefill(text);
+    if (prefill) {
+      s = newSession(jid);
+      s.flow = 'student';
+      Object.assign(s.data, prefill);
+      s.data.contact_number = canonicalPhone(s.data.contact_number || s.phone) || s.phone;
+      if (s.data.age) {
+        s.step = s.data.best_describes ? 's_goal' : 's_best';
+      } else {
+        s.step = 's_prefill_age';
+      }
+      await sock.sendMessage(
+        jid,
+        {
+          text:
+            'Thanks for sharing your details 🙏\n\n' +
+            `Name: ${s.data.name || ''}\n` +
+            `Email: ${s.data.email || ''}\n` +
+            `WhatsApp Number: ${s.data.contact_number || ''}\n` +
+            `Profession: ${s.data.profession || ''}\n` +
+            `Current status: ${s.data.best_describes || ''}\n` +
+            `Biggest challenge: ${s.data.biggest_challenge || ''}\n\n` +
+            (s.data.age
+              ? 'Thanks. Let’s continue with the next step.'
+              : 'Please share your Age.')
+        }
+      );
+      if (s.data.age) {
+        if (s.step === 's_goal') {
+          await sock.sendMessage(s.jid, {
+            text:
+              'What is your main goal from this training?\n\n' +
+              'A) Become Diabetes Educator\n' +
+              'B) Start own practice\n' +
+              'C) Increase income\n' +
+              'D) Help more patients\n' +
+              'E) All of the above'
+          });
+        } else {
+          await sock.sendMessage(s.jid, {
+            text:
+              'Great  Which best describes you?\n\n' +
+              'A) Beginner – No diabetes coaching experience\n' +
+              'B) Some experience but not confident\n' +
+              'C) Already seeing diabetes clients\n' +
+              'D) Just exploring'
+          });
+        }
+      }
+      return;
+    }
+
     s = newSession(jid);
     await sock.sendMessage(jid, { text: entryMessage() });
     return;
   }
 
-  const text = getIncomingText(msg);
   if (!text) {
     await sock.sendMessage(jid, { text: 'Please send a text message to continue.' });
     return;
