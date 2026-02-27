@@ -817,19 +817,23 @@ async function processIncoming(sock, sheets, msg) {
     return;
   }
 
-  const text = getIncomingText(msg);
-  if (!text) return;
-
   let s = sessions.get(jid);
   if (!s) {
     const existing = await isExistingUser(sheets, canonicalPhone(getPhoneFromJid(jid)));
     if (existing) {
-      const reply = await generateAiReply(text);
+      const textForAi = getIncomingText(msg) || 'Hi';
+      const reply = await generateAiReply(textForAi);
       await sock.sendMessage(jid, { text: reply });
       return;
     }
     s = newSession(jid);
     await sock.sendMessage(jid, { text: entryMessage() });
+    return;
+  }
+
+  const text = getIncomingText(msg);
+  if (!text) {
+    await sock.sendMessage(jid, { text: 'Please send a text message to continue.' });
     return;
   }
 
@@ -918,9 +922,19 @@ async function start() {
     if (event.type !== 'notify' && event.type !== 'append') return;
     for (const msg of event.messages) {
       try {
+        logger.info(
+          {
+            eventType: event.type,
+            jid: msg.key?.remoteJid,
+            fromMe: msg.key?.fromMe,
+            hasMessage: Boolean(msg.message),
+            extractedText: getIncomingText(msg)
+          },
+          'incoming message'
+        );
         await processIncoming(sock, sheets, msg);
       } catch (err) {
-        logger.error({ err }, 'failed to process incoming message');
+        logger.error({ err, jid: msg.key?.remoteJid }, 'failed to process incoming message');
       }
     }
   });
