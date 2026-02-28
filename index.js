@@ -662,10 +662,14 @@ async function handlePatientFlow(sock, sheets, s, text) {
 
   if (s.step === 'p_goal') {
     s.data.main_goal = text;
+    const displayName = (s.data.name || 'there').trim();
     await sock.sendMessage(s.jid, {
       text:
-        'Based on your details, I’ll personally review your case and suggest the best plan 👩‍⚕️\n\n' +
-        `🔹 Book 1:1 Call with Dr. Ruchita Mehta\n${PATIENT_LINK}`
+        `Hi ${displayName}\n` +
+        'Here is your booking link\n' +
+        'https://drruchitamehta.exlyapp.com/checkout/d3b56137-7abc-4ecf-b8b6-5af21a31f3b7\n\n' +
+        'Regards,\n' +
+        'Dr. Ruchita'
     });
     await finishFlow(sock, sheets, s);
     return;
