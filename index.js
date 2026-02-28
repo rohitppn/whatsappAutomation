@@ -915,53 +915,32 @@ async function processIncoming(sock, sheets, msg) {
     // Meta prefill format: auto-capture and continue from remaining questions.
     const prefill = parseMetaPrefill(text);
     if (prefill) {
-      s = newSession(jid);
-      s.flow = 'student';
-      Object.assign(s.data, prefill);
-      s.data.contact_number = canonicalPhone(s.data.contact_number || s.phone) || s.phone;
-      if (s.data.age) {
-        s.step = s.data.best_describes ? 's_goal' : 's_best';
-      } else {
-        s.step = 's_prefill_age';
-      }
-      await sock.sendMessage(
+      const prefillSession = {
         jid,
-        {
-          text:
-            'Thanks for sharing your details 🙏\n\n' +
-            `Name: ${s.data.name || ''}\n` +
-            `Email: ${s.data.email || ''}\n` +
-            `WhatsApp Number: ${s.data.contact_number || ''}\n` +
-            `Profession: ${s.data.profession || ''}\n` +
-            `Current status: ${s.data.best_describes || ''}\n` +
-            `Biggest challenge: ${s.data.biggest_challenge || ''}\n\n` +
-            (s.data.age
-              ? 'Thanks. Let’s continue with the next step.'
-              : 'Please share your Age.')
+        phone: canonicalPhone(getPhoneFromJid(jid)),
+        data: {
+          ...prefill,
+          contact_number: canonicalPhone(prefill.contact_number || getPhoneFromJid(jid)),
+          webinar_interest: 'Yes'
         }
-      );
-      if (s.data.age) {
-        if (s.step === 's_goal') {
-          await sock.sendMessage(s.jid, {
-            text:
-              'What is your main goal from this training?\n\n' +
-              'A) Become Diabetes Educator\n' +
-              'B) Start own practice\n' +
-              'C) Increase income\n' +
-              'D) Help more patients\n' +
-              'E) All of the above'
-          });
-        } else {
-          await sock.sendMessage(s.jid, {
-            text:
-              'Great  Which best describes you?\n\n' +
-              'A) Beginner – No diabetes coaching experience\n' +
-              'B) Some experience but not confident\n' +
-              'C) Already seeing diabetes clients\n' +
-              'D) Just exploring'
-          });
-        }
-      }
+      };
+
+      await saveStudent(sheets, prefillSession);
+
+      await sock.sendMessage(jid, {
+        text:
+          'You filled the form because you want to handle diabetes clients confidently.\n' +
+          'That’s exactly what I’ll be teaching in my Free Live Training Webinar.\n' +
+          '🗓 Monday | 6:00 PM IST\n' +
+          '📍 Live on Zoom\n' +
+          'You’ll learn:\n' +
+          '✔ Why diet alone doesn’t fix diabetes\n' +
+          '✔ How to decode reports\n' +
+          '✔ How to become a confident Diabetes Coach\n' +
+          'Register now:\n' +
+          `👉 ${WEBINAR_LINK}\n` +
+          'Seats are limited.'
+      });
       return;
     }
 
