@@ -777,7 +777,8 @@ async function handleOtherFlow(sock, sheets, s, text) {
         '✔️ Diet & lifestyle strategy\n' +
         '✔️ Root-cause based plan\n' +
         '✔️ Report analysis\n\n' +
-        `You can book your appointment here 👇\n🔗 ${OTHER_LINK}\n\n` +
+        'You can book your appointment here 👇\n' +
+        '🔗 https://drruchitamehta.exlyapp.com/checkout/d3b56137-7abc-4ecf-b8b6-5af21a31f3b7\n\n' +
         'Let us know once booked, we’ll guide you with the next steps 💙'
     });
     await finishFlow(sock, sheets, s);
