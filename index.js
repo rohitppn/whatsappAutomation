@@ -41,6 +41,7 @@ const logger = P({ level: process.env.LOG_LEVEL || 'info' });
 const sessions = new Map();
 const followupTimers = new Map();
 const knownUsers = new Set();
+const savedContacts = new Set();
 
 function norm(v) {
   return String(v || '')
@@ -906,6 +907,12 @@ async function processIncoming(sock, sheets, msg) {
   const text = getIncomingText(msg);
 
   if (!s) {
+    const fromPhone = canonicalPhone(getPhoneFromJid(jid));
+    if (fromPhone && savedContacts.has(fromPhone)) {
+      logger.info({ jid }, 'saved contact detected; no reply sent');
+      return;
+    }
+
     const existing = await isExistingUser(sheets, canonicalPhone(getPhoneFromJid(jid)));
     if (existing) {
       logger.info({ jid }, 'existing user detected; no reply sent');
@@ -1054,6 +1061,22 @@ async function start() {
         logger.error({ err, jid: msg.key?.remoteJid }, 'failed to process incoming message');
       }
     }
+  });
+
+  sock.ev.on('contacts.upsert', (contacts) => {
+    for (const c of contacts || []) {
+      const p = canonicalPhone((c?.id || '').split('@')[0]);
+      if (p) savedContacts.add(p);
+    }
+    logger.info({ count: savedContacts.size }, 'contacts cache updated');
+  });
+
+  sock.ev.on('contacts.update', (contacts) => {
+    for (const c of contacts || []) {
+      const p = canonicalPhone((c?.id || '').split('@')[0]);
+      if (p) savedContacts.add(p);
+    }
+    logger.info({ count: savedContacts.size }, 'contacts cache updated');
   });
 }
 
