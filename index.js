@@ -241,7 +241,8 @@ function parseBulk(text, expected) {
 }
 
 function parseMetaPrefill(text) {
-  const lines = String(text || '')
+  const raw = String(text || '');
+  const lines = raw
     .split(/\r?\n/)
     .map((l) => l.trim())
     .filter(Boolean);
@@ -249,7 +250,7 @@ function parseMetaPrefill(text) {
 
   const out = {};
   for (const line of lines) {
-    const idx = line.indexOf(':');
+    const idx = line.search(/[:：]/);
     if (idx <= 0) continue;
     const rawKey = line.slice(0, idx).trim();
     const value = line.slice(idx + 1).trim();
@@ -291,7 +292,17 @@ function parseMetaPrefill(text) {
     Number(Boolean(out.email)) +
     Number(Boolean(out.contact_number)) +
     Number(Boolean(out.profession || out.best_describes || out.biggest_challenge));
-  if (score < 3) return null;
+
+  // Fallback: some ad templates arrive with weird line wrapping; detect by anchors.
+  if (score < 3) {
+    const n = norm(raw);
+    const hasAnchors =
+      n.includes('filledinyourform') &&
+      n.includes('firstname') &&
+      n.includes('phonenumber') &&
+      n.includes('email');
+    if (!hasAnchors) return null;
+  }
   return out;
 }
 
@@ -903,51 +914,65 @@ async function processIncoming(sock, sheets, msg) {
     return;
   }
 
-  let s = sessions.get(jid);
+  const fromPhone = canonicalPhone(getPhoneFromJid(jid));
   const text = getIncomingText(msg);
+  const prefill = parseMetaPrefill(text);
+  let s = sessions.get(jid);
+
+  // Always prioritize Meta prefill messages, even if a session already exists.
+  if (prefill) {
+    if (fromPhone && savedContacts.has(fromPhone)) {
+      logger.info({ jid }, 'saved contact + prefill detected; no reply sent');
+      sessions.delete(jid);
+      return;
+    }
+
+    const existing = await isExistingUser(sheets, fromPhone);
+    if (existing) {
+      logger.info({ jid }, 'existing user + prefill detected; no reply sent');
+      sessions.delete(jid);
+      return;
+    }
+
+    sessions.delete(jid);
+    const prefillSession = {
+      jid,
+      phone: fromPhone,
+      data: {
+        ...prefill,
+        contact_number: canonicalPhone(prefill.contact_number || fromPhone),
+        webinar_interest: 'Yes'
+      }
+    };
+
+    await saveStudent(sheets, prefillSession);
+
+    await sock.sendMessage(jid, {
+      text:
+        'You filled the form because you want to handle diabetes clients confidently.\n' +
+        'That’s exactly what I’ll be teaching in my Free Live Training Webinar.\n' +
+        '🗓 Monday | 6:00 PM IST\n' +
+        '📍 Live on Zoom\n' +
+        'You’ll learn:\n' +
+        '✔ Why diet alone doesn’t fix diabetes\n' +
+        '✔ How to decode reports\n' +
+        '✔ How to become a confident Diabetes Coach\n' +
+        'Register now:\n' +
+        `👉 ${WEBINAR_LINK}\n` +
+        'Seats are limited.'
+    });
+    return;
+  }
 
   if (!s) {
-    const fromPhone = canonicalPhone(getPhoneFromJid(jid));
     if (fromPhone && savedContacts.has(fromPhone)) {
       logger.info({ jid }, 'saved contact detected; no reply sent');
       return;
     }
 
-    const existing = await isExistingUser(sheets, canonicalPhone(getPhoneFromJid(jid)));
+    const existing = await isExistingUser(sheets, fromPhone);
     if (existing) {
       logger.info({ jid }, 'existing user detected; no reply sent');
-      return;
-    }
-
-    // Meta prefill format: auto-capture and continue from remaining questions.
-    const prefill = parseMetaPrefill(text);
-    if (prefill) {
-      const prefillSession = {
-        jid,
-        phone: canonicalPhone(getPhoneFromJid(jid)),
-        data: {
-          ...prefill,
-          contact_number: canonicalPhone(prefill.contact_number || getPhoneFromJid(jid)),
-          webinar_interest: 'Yes'
-        }
-      };
-
-      await saveStudent(sheets, prefillSession);
-
-      await sock.sendMessage(jid, {
-        text:
-          'You filled the form because you want to handle diabetes clients confidently.\n' +
-          'That’s exactly what I’ll be teaching in my Free Live Training Webinar.\n' +
-          '🗓 Monday | 6:00 PM IST\n' +
-          '📍 Live on Zoom\n' +
-          'You’ll learn:\n' +
-          '✔ Why diet alone doesn’t fix diabetes\n' +
-          '✔ How to decode reports\n' +
-          '✔ How to become a confident Diabetes Coach\n' +
-          'Register now:\n' +
-          `👉 ${WEBINAR_LINK}\n` +
-          'Seats are limited.'
-      });
       return;
     }
 
