@@ -35,6 +35,7 @@ const MISTRAL_API_KEY = process.env.MISTRAL_API_KEY || '';
 const MISTRAL_MODEL = process.env.MISTRAL_MODEL || 'mistral-small-latest';
 const USE_PAIRING_CODE = String(process.env.USE_PAIRING_CODE || 'false').toLowerCase() === 'true';
 const PAIRING_PHONE_NUMBER = (process.env.PAIRING_PHONE_NUMBER || '').replace(/\D/g, '');
+const AUTH_DIR = process.env.AUTH_DIR || 'auth';
 
 const logger = P({ level: process.env.LOG_LEVEL || 'info' });
 
@@ -919,6 +920,14 @@ async function processIncoming(sock, sheets, msg) {
   const prefill = parseMetaPrefill(text);
   let s = sessions.get(jid);
 
+  // Global guard: if number already exists in Sheet3/Sheet4, never start/continue flow.
+  const alreadyInSheets = await isExistingUser(sheets, fromPhone);
+  if (alreadyInSheets) {
+    if (sessions.has(jid)) sessions.delete(jid);
+    logger.info({ jid, fromPhone }, 'number already exists in sheets; no reply sent');
+    return;
+  }
+
   // Always prioritize Meta prefill messages, even if a session already exists.
   if (prefill) {
     if (fromPhone && savedContacts.has(fromPhone)) {
@@ -970,12 +979,6 @@ async function processIncoming(sock, sheets, msg) {
       return;
     }
 
-    const existing = await isExistingUser(sheets, fromPhone);
-    if (existing) {
-      logger.info({ jid }, 'existing user detected; no reply sent');
-      return;
-    }
-
     s = newSession(jid);
     await sock.sendMessage(jid, { text: entryMessage() });
     return;
@@ -1008,7 +1011,19 @@ async function processIncoming(sock, sheets, msg) {
 }
 
 async function start() {
-  const { state, saveCreds } = await useMultiFileAuthState('auth');
+  const resolvedAuthDir = path.isAbsolute(AUTH_DIR)
+    ? AUTH_DIR
+    : path.resolve(process.cwd(), AUTH_DIR);
+  fs.mkdirSync(resolvedAuthDir, { recursive: true });
+  logger.info(
+    {
+      authDir: resolvedAuthDir,
+      hasCreds: fs.existsSync(path.join(resolvedAuthDir, 'creds.json'))
+    },
+    'auth directory check'
+  );
+
+  const { state, saveCreds } = await useMultiFileAuthState(resolvedAuthDir);
   const { version } = await fetchLatestBaileysVersion();
   const sheets = buildSheetsClient();
 
