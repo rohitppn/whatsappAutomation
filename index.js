@@ -949,7 +949,8 @@ async function processIncoming(sock, sheets, msg) {
       phone: fromPhone,
       data: {
         ...prefill,
-        contact_number: canonicalPhone(prefill.contact_number || fromPhone),
+        // For dedupe and future no-reply checks, always persist sender number.
+        contact_number: canonicalPhone(fromPhone || prefill.contact_number),
         webinar_interest: 'Yes'
       }
     };
@@ -1105,6 +1106,9 @@ async function start() {
 
   sock.ev.on('contacts.upsert', (contacts) => {
     for (const c of contacts || []) {
+      // Baileys emits many contact events; treat as saved only when explicit name exists.
+      const savedName = String(c?.name || '').trim();
+      if (!savedName) continue;
       const p = canonicalPhone((c?.id || '').split('@')[0]);
       if (p) savedContacts.add(p);
     }
@@ -1113,6 +1117,8 @@ async function start() {
 
   sock.ev.on('contacts.update', (contacts) => {
     for (const c of contacts || []) {
+      const savedName = String(c?.name || '').trim();
+      if (!savedName) continue;
       const p = canonicalPhone((c?.id || '').split('@')[0]);
       if (p) savedContacts.add(p);
     }
