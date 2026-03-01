@@ -541,60 +541,52 @@ async function savePatient(sheets, s) {
   const others = d.other_concern
     ? `${d.other_concern}${d.other_since ? ` | Since: ${d.other_since}` : ''}`
     : '';
-  const headers = await getSheetHeaders(sheets, PATIENTS_SHEET_NAME);
-  if (!headers.length) {
-    const row = [
-      `PAT-${Date.now()}`,
-      d.name || '',
-      d.age || '',
-      d.contact_number || '',
-      d.email || '',
-      '',
-      d.current_medication || '',
-      d.diabetes_type || '',
-      d.diabetes_years || '',
-      d.latest_fasting_pp || '',
-      d.main_goal || '',
-      new Date().toISOString(),
-      '',
-      others,
-      isType1(d.diabetes_type) ? 'Yes' : '',
-      d.type1_since_diagnosed || '',
-      d.type1_latest_values || '',
-      d.type1_high_low || '',
-      d.type1_symptoms || '',
-      'Yes'
-    ];
-    await appendRow(sheets, PATIENTS_SHEET_NAME, row, s.jid);
-  } else {
-    const row = new Array(headers.length).fill('');
-    const setVal = (predicates, value) => {
-      const idx = findHeaderIndex(headers, predicates);
-      if (idx >= 0) row[idx] = value || '';
-    };
 
-    setVal([(h) => h === 'id'], `PAT-${Date.now()}`);
-    setVal([(h) => h === 'name'], d.name || '');
-    setVal([(h) => h === 'age'], d.age || '');
-    setVal([(h) => h.includes('number') || h.includes('whatsappno')], d.contact_number || '');
-    setVal([(h) => h === 'email'], d.email || '');
-    setVal([(h) => h.includes('profession')], d.profession || '');
-    setVal([(h) => h.includes('currentmedica') || h.includes('currentmedication')], d.current_medication || '');
-    setVal([(h) => h.includes('typeofdiab') || h.includes('diabetestype')], d.diabetes_type || '');
-    setVal([(h) => h.includes('sincehowmanyyears') && !h.includes('diagnosed')], d.diabetes_years || '');
-    setVal([(h) => h.includes('fasting') && h.includes('pp') && !h.includes('latestfasting')], d.latest_fasting_pp || '');
-    setVal([(h) => h.includes('maingoal')], d.main_goal || '');
-    setVal([(h) => h.includes('time') && h.includes('date')], new Date().toISOString());
-    setVal([(h) => h === 'others'], others);
-    setVal([(h) => h === 'type1' || h.includes('type1')], isType1(d.diabetes_type) ? 'Yes' : '');
-    setVal([(h) => h.includes('diagnosed')], d.type1_since_diagnosed || '');
-    setVal([(h) => h.includes('latestfasting') || (h.includes('latest') && h.includes('values'))], d.type1_latest_values || '');
-    setVal([(h) => h.includes('frequent') || h.includes('highslow') || h.includes('doyouexperie')], d.type1_high_low || '');
-    setVal([(h) => h.includes('symptom')], d.type1_symptoms || '');
-    setVal([(h) => h.includes('takefollow')], 'Yes');
+  // Fixed A->T mapping to avoid column shifts and always start from column A.
+  // A ID
+  // B Name
+  // C Age
+  // D Number
+  // E Email
+  // F Profession
+  // G Current Medication
+  // H Type Of Diabetes
+  // I Since how many years? (non-Type1)
+  // J Fasting & PP sugar values (non-Type1)
+  // K Main goal
+  // L Time/Date
+  // M Followups
+  // N Others
+  // O TYPE 1
+  // P Since diagnosed? (Type1)
+  // Q Latest values (Type1)
+  // R Frequent highs/lows (Type1)
+  // S Symptoms (Type1)
+  // T Take Follow ups
+  const row = [
+    `PAT-${Date.now()}`,
+    d.name || '',
+    d.age || '',
+    d.contact_number || '',
+    d.email || '',
+    d.profession || '',
+    d.current_medication || '',
+    d.diabetes_type || '',
+    d.diabetes_years || '',
+    d.latest_fasting_pp || '',
+    d.main_goal || '',
+    new Date().toISOString(),
+    '',
+    others,
+    isType1(d.diabetes_type) ? 'Yes' : '',
+    d.type1_since_diagnosed || '',
+    d.type1_latest_values || '',
+    d.type1_high_low || '',
+    d.type1_symptoms || '',
+    'Yes'
+  ];
 
-    await appendRow(sheets, PATIENTS_SHEET_NAME, row, s.jid);
-  }
+  await appendRow(sheets, PATIENTS_SHEET_NAME, row, s.jid);
   knownUsers.add(canonicalPhone(d.contact_number || s.phone));
   knownUsers.add(canonicalPhone(s.phone));
 }
