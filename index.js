@@ -781,14 +781,12 @@ async function handlePatientFlow(sock, sheets, s, text) {
 
   if (s.step === 'p_goal') {
     s.data.main_goal = text;
-    const displayName = (s.data.name || 'there').trim();
     await sock.sendMessage(s.jid, {
       text:
-        `Hi ${displayName}\n` +
-        'Here is your booking link\n' +
-        'https://drruchitamehta.exlyapp.com/checkout/d3b56137-7abc-4ecf-b8b6-5af21a31f3b7\n\n' +
-        'Regards,\n' +
-        'Dr. Ruchita'
+        'Okay, Based on your details, I’ll personally review your case and recommend the best plan tailored specifically for you.\n\n' +
+        'Book your appointment now via this link 👇\n\n' +
+        'https://drruchitamehta.exlyapp.com/checkout/d3b56137-7abc-4ecf-b8b6-5af21a31f3b7\n\n\n' +
+        'Let’s get you real results 💛'
     });
     await finishFlow(sock, sheets, s);
     return;
