@@ -331,13 +331,40 @@ function confirmStudent(d) {
 
 async function appendRow(sheets, sheetName, row, jid) {
   if (!sheets || !GOOGLE_SHEET_ID) return;
-  await sheets.spreadsheets.values.append({
+  const toCol = (n) => {
+    let num = n;
+    let s = '';
+    while (num > 0) {
+      const mod = (num - 1) % 26;
+      s = String.fromCharCode(65 + mod) + s;
+      num = Math.floor((num - 1) / 26);
+    }
+    return s;
+  };
+
+  const colA = await sheets.spreadsheets.values.get({
     spreadsheetId: GOOGLE_SHEET_ID,
-    range: `${sheetName}!A:Z`,
+    range: `${sheetName}!A:A`
+  });
+  const aRows = colA.data.values || [];
+  let lastDataRow = 1; // keep row 1 as header
+  for (let i = aRows.length - 1; i >= 0; i -= 1) {
+    const v = String(aRows[i]?.[0] || '').trim();
+    if (v) {
+      lastDataRow = i + 1;
+      break;
+    }
+  }
+  const nextRow = Math.max(2, lastDataRow + 1);
+  const endCol = toCol(row.length);
+
+  await sheets.spreadsheets.values.update({
+    spreadsheetId: GOOGLE_SHEET_ID,
+    range: `${sheetName}!A${nextRow}:${endCol}${nextRow}`,
     valueInputOption: 'USER_ENTERED',
     requestBody: { values: [row] }
   });
-  logger.info({ jid, sheetName }, 'sheet row appended');
+  logger.info({ jid, sheetName, nextRow }, 'sheet row appended');
 }
 
 async function getSheetHeaders(sheets, sheetName) {
