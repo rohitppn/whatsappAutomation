@@ -43,6 +43,7 @@ const sessions = new Map();
 const followupTimers = new Map();
 const knownUsers = new Set();
 const savedContacts = new Set();
+let emergencyStop = false;
 
 function norm(v) {
   return String(v || '')
@@ -382,6 +383,31 @@ async function phoneExistsInSheet(sheets, sheetName, phone) {
   }
 }
 
+async function getLatestPatientType1Flag(sheets, phone) {
+  if (!sheets || !phone) return null;
+  try {
+    const res = await sheets.spreadsheets.values.get({
+      spreadsheetId: GOOGLE_SHEET_ID,
+      range: `${PATIENTS_SHEET_NAME}!A:T`
+    });
+    const rows = res.data.values || [];
+    const normalizedPhone = canonicalPhone(phone);
+    for (let i = rows.length - 1; i >= 1; i -= 1) {
+      const row = rows[i] || [];
+      const rowPhone = canonicalPhone(row[3] || '');
+      if (rowPhone && rowPhone === normalizedPhone) {
+        const type1Cell = String(row[14] || '').trim().toLowerCase(); // O column
+        if (type1Cell === 'yes') return true;
+        return false;
+      }
+    }
+    return null;
+  } catch (err) {
+    logger.error({ err }, 'failed to read patient type1 flag');
+    return null;
+  }
+}
+
 async function isExistingUser(sheets, phone) {
   const normalized = canonicalPhone(phone);
   if (!normalized) return false;
@@ -468,6 +494,13 @@ function clearFollowups(jid) {
   if (!timers) return;
   for (const t of timers) clearTimeout(t);
   followupTimers.delete(jid);
+}
+
+function clearAllFollowups() {
+  for (const [, timers] of followupTimers.entries()) {
+    for (const t of timers) clearTimeout(t);
+  }
+  followupTimers.clear();
 }
 
 function scheduleFollowups(sock, sheets, session) {
@@ -670,8 +703,11 @@ async function handlePatientFlow(sock, sheets, s, text) {
 
   if (s.step === 'p_type') {
     s.data.diabetes_type = text;
-
-    if (isType1(text)) {
+    const phoneForLookup = canonicalPhone(s.data.contact_number || s.phone);
+    const type1FromSheet = await getLatestPatientType1Flag(sheets, phoneForLookup);
+    const goType1 = type1FromSheet === true || (type1FromSheet === null && isType1(text));
+    if (goType1) {
+      s.data.diabetes_type = 'Type 1';
       s.step = 't1_intro';
       await sock.sendMessage(s.jid, {
         text:
@@ -952,6 +988,7 @@ async function handleStudentFlow(sock, sheets, s, text) {
 
 async function processIncoming(sock, sheets, msg) {
   if (!msg.message || msg.key.fromMe) return;
+  if (emergencyStop) return;
 
   const jid = msg.key.remoteJid;
   if (!jid || jid === 'status@broadcast' || jid.endsWith('@g.us') || jid.endsWith('@newsletter')) {
@@ -1088,6 +1125,15 @@ async function start() {
     }
   });
 
+  const baseSendMessage = sock.sendMessage.bind(sock);
+  sock.sendMessage = async (...args) => {
+    if (emergencyStop) {
+      logger.warn({ jid: args?.[0] }, 'outbound message blocked by emergency stop');
+      return null;
+    }
+    return baseSendMessage(...args);
+  };
+
   sock.ev.on('creds.update', saveCreds);
 
   // Headless logs often render QR poorly; pairing code is more reliable on Railway.
@@ -1130,13 +1176,31 @@ async function start() {
     if (event.type !== 'notify' && event.type !== 'append') return;
     for (const msg of event.messages) {
       try {
+        const text = getIncomingText(msg);
+        if (msg.key?.fromMe) {
+          const cmd = String(text || '').toLowerCase().replace(/\s+/g, '');
+          if (cmd === '.' || cmd === '.--' || cmd === '.stop' || cmd === 'stopbot') {
+            emergencyStop = true;
+            sessions.clear();
+            clearAllFollowups();
+            logger.warn('EMERGENCY STOP ENABLED via operator command');
+            continue;
+          }
+          if (cmd === '..' || cmd === '.++' || cmd === '.resume' || cmd === 'startbot') {
+            emergencyStop = false;
+            logger.warn('EMERGENCY STOP DISABLED via operator command');
+            continue;
+          }
+        }
+
         logger.info(
           {
             eventType: event.type,
             jid: msg.key?.remoteJid,
             fromMe: msg.key?.fromMe,
             hasMessage: Boolean(msg.message),
-            extractedText: getIncomingText(msg)
+            extractedText: text,
+            emergencyStop
           },
           'incoming message'
         );
