@@ -31,6 +31,7 @@ const OTHER_LINK = process.env.OTHER_LINK || TYPE1_LINK;
 const FOLLOWUP_HOURS_1 = Number(process.env.FOLLOWUP_HOURS_1 || '24');
 const FOLLOWUP_HOURS_2 = Number(process.env.FOLLOWUP_HOURS_2 || '48');
 const FOLLOWUP_HOURS_3 = Number(process.env.FOLLOWUP_HOURS_3 || '72');
+const FOLLOWUP_POLL_SECONDS = Number(process.env.FOLLOWUP_POLL_SECONDS || '60');
 const MISTRAL_API_KEY = process.env.MISTRAL_API_KEY || '';
 const MISTRAL_MODEL = process.env.MISTRAL_MODEL || 'mistral-small-latest';
 const USE_PAIRING_CODE = String(process.env.USE_PAIRING_CODE || 'false').toLowerCase() === 'true';
@@ -42,8 +43,8 @@ const logger = P({ level: process.env.LOG_LEVEL || 'info' });
 const sessions = new Map();
 const followupTimers = new Map();
 const knownUsers = new Set();
-const savedContacts = new Set();
 let emergencyStop = false;
+let followupInterval = null;
 
 function norm(v) {
   return String(v || '')
@@ -66,6 +67,12 @@ function canonicalPhone(v) {
   const digits = String(v || '').replace(/\D/g, '');
   if (!digits) return '';
   return digits.length > 10 ? digits.slice(-10) : digits;
+}
+
+function formatPhoneForSheet(v) {
+  const n = canonicalPhone(v);
+  if (!n) return '';
+  return `'${`+91${n}`}`;
 }
 
 function readJsonFileMaybe(filePath) {
@@ -530,6 +537,16 @@ function clearAllFollowups() {
   followupTimers.clear();
 }
 
+async function updateSheetCell(sheets, sheetName, rowNumber, colLetter, value) {
+  if (!sheets || !GOOGLE_SHEET_ID) return;
+  await sheets.spreadsheets.values.update({
+    spreadsheetId: GOOGLE_SHEET_ID,
+    range: `${sheetName}!${colLetter}${rowNumber}`,
+    valueInputOption: 'USER_ENTERED',
+    requestBody: { values: [[value]] }
+  });
+}
+
 function scheduleFollowups(sock, sheets, session) {
   clearFollowups(session.jid);
 
@@ -570,17 +587,132 @@ function scheduleFollowups(sock, sheets, session) {
   followupTimers.set(session.jid, timers);
 }
 
+function getFollowupMessages(flow, data) {
+  if (flow === 'student') {
+    return [
+      `Reminder: webinar details are here ${WEBINAR_LINK}`,
+      'Checking in on your interest. Reply if you need guidance.',
+      'Final follow-up: our team will connect with you shortly.'
+    ];
+  }
+  return [
+    `Follow-up: consultation link ${isType1(data?.diabetes_type) ? TYPE1_LINK : PATIENT_LINK}`,
+    `Webinar link: ${DIABETES_WEBINAR_LINK}`,
+    'Final follow-up: our team will connect with you shortly.'
+  ];
+}
+
+function parseSentFollowups(v) {
+  const n = Number(String(v || '').trim());
+  if (!Number.isFinite(n) || n < 0) return 0;
+  return Math.min(3, Math.floor(n));
+}
+
+function parseIsoTime(value) {
+  const ts = Date.parse(String(value || '').trim());
+  if (!Number.isFinite(ts)) return null;
+  return ts;
+}
+
+async function processSheetFollowups(sock, sheets, opts) {
+  const { sheetName, flow, timeIdx, followupsIdx, takeIdx, numberIdx, typeIdx } = opts;
+  if (!sheets || emergencyStop) return;
+  try {
+    const res = await sheets.spreadsheets.values.get({
+      spreadsheetId: GOOGLE_SHEET_ID,
+      range: `${sheetName}!A:T`
+    });
+    const rows = res.data.values || [];
+    const now = Date.now();
+    const thresholdsMs = [FOLLOWUP_HOURS_1, FOLLOWUP_HOURS_2, FOLLOWUP_HOURS_3].map(
+      (h) => h * 60 * 60 * 1000
+    );
+
+    for (let i = 1; i < rows.length; i += 1) {
+      const row = rows[i] || [];
+      const take = String(row[takeIdx] || '').trim().toLowerCase();
+      if (take === 'no') continue;
+
+      const rowTs = parseIsoTime(row[timeIdx]);
+      if (!rowTs) continue;
+
+      const elapsed = now - rowTs;
+      const sentCount = parseSentFollowups(row[followupsIdx]);
+
+      let nextIndex = -1;
+      for (let idx = sentCount; idx < 3; idx += 1) {
+        if (elapsed >= thresholdsMs[idx]) {
+          nextIndex = idx;
+        } else {
+          break;
+        }
+      }
+      if (nextIndex < 0) continue;
+
+      const phone = canonicalPhone(row[numberIdx] || '');
+      if (!phone) continue;
+      const jid = `91${phone}@s.whatsapp.net`;
+      const diabetesType = typeIdx >= 0 ? String(row[typeIdx] || '') : '';
+      const messages = getFollowupMessages(flow, { diabetes_type: diabetesType });
+      const text = messages[nextIndex];
+      if (!text) continue;
+
+      await sock.sendMessage(jid, { text });
+      await updateSheetCell(
+        sheets,
+        sheetName,
+        i + 1,
+        String.fromCharCode('A'.charCodeAt(0) + followupsIdx),
+        String(nextIndex + 1)
+      );
+      logger.info({ sheetName, row: i + 1, step: nextIndex + 1, phone }, 'followup sent from sheet');
+    }
+  } catch (err) {
+    logger.error({ err, sheetName }, 'failed processing sheet followups');
+  }
+}
+
+function startFollowupWorker(sock, sheets) {
+  if (!sheets) return;
+  if (followupInterval) clearInterval(followupInterval);
+  const run = async () => {
+    await processSheetFollowups(sock, sheets, {
+      sheetName: STUDENTS_SHEET_NAME,
+      flow: 'student',
+      timeIdx: 10, // K
+      followupsIdx: 11, // L
+      takeIdx: 12, // M
+      numberIdx: 3, // D
+      typeIdx: -1
+    });
+    await processSheetFollowups(sock, sheets, {
+      sheetName: PATIENTS_SHEET_NAME,
+      flow: 'patient',
+      timeIdx: 11, // L
+      followupsIdx: 12, // M
+      takeIdx: 19, // T
+      numberIdx: 3, // D
+      typeIdx: 7 // H
+    });
+  };
+  run().catch((err) => logger.error({ err }, 'initial followup worker run failed'));
+  followupInterval = setInterval(() => {
+    run().catch((err) => logger.error({ err }, 'followup worker run failed'));
+  }, Math.max(15, FOLLOWUP_POLL_SECONDS) * 1000);
+}
+
 function isType1(v) {
   return norm(v).includes('type1');
 }
 
 async function saveStudent(sheets, s) {
   const d = s.data;
+  const phoneText = formatPhoneForSheet(d.contact_number || s.phone);
   const row = [
     `STU-${Date.now()}`,
     d.name || '',
     d.age || '',
-    d.contact_number || '',
+    phoneText,
     d.email || '',
     d.profession || '',
     d.best_describes || '',
@@ -598,6 +730,7 @@ async function saveStudent(sheets, s) {
 
 async function savePatient(sheets, s) {
   const d = s.data;
+  const phoneText = formatPhoneForSheet(d.contact_number || s.phone);
   const others = d.other_concern
     ? `${d.other_concern}${d.other_since ? ` | Since: ${d.other_since}` : ''}`
     : '';
@@ -627,7 +760,7 @@ async function savePatient(sheets, s) {
     `PAT-${Date.now()}`,
     d.name || '',
     d.age || '',
-    d.contact_number || '',
+    phoneText,
     d.email || '',
     d.profession || '',
     d.current_medication || '',
@@ -666,8 +799,6 @@ function newSession(jid) {
 async function finishFlow(sock, sheets, s) {
   if (s.flow === 'student') await saveStudent(sheets, s);
   else await savePatient(sheets, s);
-
-  scheduleFollowups(sock, sheets, s);
   sessions.delete(s.jid);
 }
 
@@ -1035,12 +1166,6 @@ async function processIncoming(sock, sheets, msg) {
 
   // Always prioritize Meta prefill messages, even if a session already exists.
   if (prefill) {
-    if (fromPhone && savedContacts.has(fromPhone)) {
-      logger.info({ jid }, 'saved contact + prefill detected; no reply sent');
-      sessions.delete(jid);
-      return;
-    }
-
     const existing = await isExistingUser(sheets, fromPhone);
     if (existing) {
       logger.info({ jid }, 'existing user + prefill detected; no reply sent');
@@ -1080,11 +1205,6 @@ async function processIncoming(sock, sheets, msg) {
   }
 
   if (!s) {
-    if (fromPhone && savedContacts.has(fromPhone)) {
-      logger.info({ jid }, 'saved contact detected; no reply sent');
-      return;
-    }
-
     s = newSession(jid);
     await sock.sendMessage(jid, { text: entryMessage() });
     return;
@@ -1160,6 +1280,7 @@ async function start() {
   };
 
   sock.ev.on('creds.update', saveCreds);
+  startFollowupWorker(sock, sheets);
 
   // Headless logs often render QR poorly; pairing code is more reliable on Railway.
   if (USE_PAIRING_CODE && !state.creds.registered && PAIRING_PHONE_NUMBER) {
@@ -1236,26 +1357,6 @@ async function start() {
     }
   });
 
-  sock.ev.on('contacts.upsert', (contacts) => {
-    for (const c of contacts || []) {
-      // Baileys emits many contact events; treat as saved only when explicit name exists.
-      const savedName = String(c?.name || '').trim();
-      if (!savedName) continue;
-      const p = canonicalPhone((c?.id || '').split('@')[0]);
-      if (p) savedContacts.add(p);
-    }
-    logger.info({ count: savedContacts.size }, 'contacts cache updated');
-  });
-
-  sock.ev.on('contacts.update', (contacts) => {
-    for (const c of contacts || []) {
-      const savedName = String(c?.name || '').trim();
-      if (!savedName) continue;
-      const p = canonicalPhone((c?.id || '').split('@')[0]);
-      if (p) savedContacts.add(p);
-    }
-    logger.info({ count: savedContacts.size }, 'contacts cache updated');
-  });
 }
 
 start().catch((err) => {
